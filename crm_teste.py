@@ -8,6 +8,7 @@ import os
 from dotenv import load_dotenv
 import random
 import streamlit.components.v1 as components
+import qrcode
 
 # Carrega as variáveis de ambiente
 load_dotenv()
@@ -454,13 +455,38 @@ with aba_produtos:
 
 # --- ABA DE GERENCIAR ESTOQUE ---
 with aba_estoque:
-    st.subheader("Gerenciar Estoque Atual")
+    st.subheader("Gerenciar Estoque e Etiquetas QR Code")
+    from io import BytesIO
+    
     conn = conectar_banco()
-    df_prod_lista = pd.read_sql_query("SELECT id_produto as ID, codigo_barras as 'Código de Barras', categoria, nome_produto as Produto, preco_venda, quantidade_estoque as Estoque FROM produtos", conn)
+    df_prod_lista = pd.read_sql_query("SELECT id_produto as ID, codigo_barras as 'Código', nome_produto as Produto, preco_venda FROM produtos", conn)
     conn.close()
     
     if not df_prod_lista.empty:
         st.dataframe(df_prod_lista, use_container_width=True, hide_index=True)
+        
+        st.markdown("---")
+        st.subheader("🖨️ Gerador de QR Code para Etiqueta")
+        
+        produto_qr = st.selectbox("Escolha o produto para gerar o QR Code:", options=df_prod_lista['ID'], format_func=lambda x: f"{df_prod_lista.loc[df_prod_lista['ID']==x, 'Produto'].values[0]}")
+        
+        if st.button("Gerar QR Code"):
+            cod = df_prod_lista.loc[df_prod_lista['ID']==produto_qr, 'Código'].values[0]
+            if cod:
+                # Cria a imagem do QR Code
+                qr = qrcode.QRCode(version=1, box_size=10, border=5)
+                qr.add_data(cod)
+                qr.make(fit=True)
+                img = qr.make_image(fill_color="black", back_color="white")
+                
+                # Converte para exibir no Streamlit
+                buf = BytesIO()
+                img.save(buf, format="PNG")
+                st.image(buf, caption=f"QR Code para: {cod}", width=200)
+                st.info("Clique com o botão direito na imagem e selecione 'Salvar imagem como' para imprimir sua etiqueta.")
+            else:
+                st.error("Este produto não possui código cadastrado.")
+
         st.markdown("### 🗑️ Remover Produto")
         with st.form("form_remover_produto"):
             produto_a_remover = st.selectbox("Selecione o produto a excluir", options=df_prod_lista['ID'], format_func=lambda x: f"ID: {x}")
@@ -470,7 +496,6 @@ with aba_estoque:
                 conn_rem.commit()
                 conn_rem.close()
                 st.success("✅ Produto removido!")
-                time.sleep(1)
                 st.rerun()
     else:
         st.info("Estoque vazio.")
