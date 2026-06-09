@@ -475,10 +475,26 @@ with aba_estoque:
             cod = df_prod_lista.loc[df_prod_lista['ID']==produto_qr, 'Código'].values[0]
             if cod:
                 # Cria a imagem do QR Code
-                qr = qrcode.QRCode(version=1, box_size=10, border=5)
+                if st.button("Gerar QR Code"):
+            cod = df_prod_lista.loc[df_prod_lista['ID']==produto_qr, 'Código'].values[0]
+            if cod:
+                # Ajustamos o box_size e o border para facilitar a leitura
+                qr = qrcode.QRCode(
+                    version=1, 
+                    error_correction=qrcode.constants.ERROR_CORRECT_H, # Alta correção de erros
+                    box_size=15, 
+                    border=4
+                )
                 qr.add_data(cod)
                 qr.make(fit=True)
+                
+                # Cores estritas
                 img = qr.make_image(fill_color="black", back_color="white")
+                
+                buf = BytesIO()
+                img.save(buf, format="PNG")
+                st.image(buf, caption=f"Código: {cod}", width=300)
+                st.info("Dica: Não deixe a tela do monitor com muito reflexo de luz.")
                 
                 # Converte para exibir no Streamlit
                 buf = BytesIO()
