@@ -8,7 +8,7 @@ import os
 from dotenv import load_dotenv
 import random
 
-# Carrega as variáveis de ambiente do ficheiro .env (local) ou Secrets (Nuvem)
+# Carrega as variáveis de ambiente
 load_dotenv()
 
 # ==========================================
@@ -21,7 +21,6 @@ def criar_tabelas():
     conn = conectar_banco()
     cursor = conn.cursor()
     
-    # Tabela Clientes
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS clientes (
             id_cliente INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -34,7 +33,6 @@ def criar_tabelas():
         )
     ''')
     
-    # Tabela Vendedores (NOVA)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS vendedores (
             id_vendedor INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -43,7 +41,6 @@ def criar_tabelas():
         )
     ''')
     
-    # Tabela Produtos
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS produtos (
             id_produto INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -56,7 +53,6 @@ def criar_tabelas():
         )
     ''')
     
-    # Tabela Vendas
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS vendas (
             id_venda INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -70,7 +66,6 @@ def criar_tabelas():
         )
     ''')
     
-    # Tabela Itens Venda
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS itens_venda (
             id_item INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -83,7 +78,6 @@ def criar_tabelas():
         )
     ''')
 
-    # Tabela Logs
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS logs (
             data TEXT,
@@ -92,20 +86,19 @@ def criar_tabelas():
         )
     ''')
     
-    # "Vacinas" para atualizar o banco de dados antigo sem perder dados
+    # "Vacinas" para atualização sem perda de dados
     try: cursor.execute("ALTER TABLE produtos ADD COLUMN quantidade_estoque INTEGER DEFAULT 0")
-    except sqlite3.OperationalError: pass
+    except: pass
     try: cursor.execute("ALTER TABLE produtos ADD COLUMN categoria TEXT DEFAULT 'Normal'")
-    except sqlite3.OperationalError: pass
+    except: pass
     try: cursor.execute("ALTER TABLE produtos ADD COLUMN codigo_barras TEXT")
-    except sqlite3.OperationalError: pass
+    except: pass
     try: cursor.execute("ALTER TABLE vendas ADD COLUMN id_vendedor INTEGER")
-    except sqlite3.OperationalError: pass
+    except: pass
     try: cursor.execute("ALTER TABLE vendas ADD COLUMN forma_pagamento TEXT")
-    except sqlite3.OperationalError: pass
-        
+    except: pass
     try: cursor.execute("UPDATE clientes SET email = NULL WHERE email = ''")
-    except sqlite3.OperationalError: pass
+    except: pass
 
     conn.commit()
     conn.close()
@@ -126,8 +119,7 @@ def registrar_log(acao, detalhes):
         cursor.execute("INSERT INTO logs (data, acao, detalhes) VALUES (?, ?, ?)", 
                        (data_agora, acao, detalhes))
         conn_log.commit()
-    except Exception:
-        pass 
+    except: pass 
     finally:
         if conn_log: conn_log.close()
 
@@ -171,7 +163,6 @@ if not st.session_state['autenticado']:
                         st.error("❌ Usuário ou senha incorretos.")
     st.stop()
 
-
 # ==========================================
 # 3. INTERFACE DO APLICATIVO (TABS)
 # ==========================================
@@ -187,7 +178,7 @@ aba_pdv, aba_dashboard, aba_produtos, aba_estoque, aba_clientes, aba_vendedores 
 
 # --- ABA DE FRENTE DE CAIXA (PDV) ---
 with aba_pdv:
-    st.subheader("🛒 Frente de Caixa Rápida")
+    st.subheader("🛒 Caixa Rápido e Manual")
     
     conn = conectar_banco()
     df_cli = pd.read_sql_query("SELECT id_cliente, nome FROM clientes", conn)
@@ -198,32 +189,48 @@ with aba_pdv:
     if df_cli.empty or df_prod.empty or df_vend.empty:
         st.warning("⚠️ Atenção: Cadastre pelo menos 1 Cliente, 1 Vendedor e 1 Produto nas abas ao lado para liberar o Caixa.")
     else:
-        # A magia do Leitor de Código de Barras
-        st.markdown("**1. Escanear Produto**")
-        codigo_bipado = st.text_input("Bipe o código de barras do produto aqui e pressione Enter:", key="leitor_pdv")
-        
-        opcoes_produtos = df_prod['id_produto'].tolist()
-        index_padrao = 0
-        
-        if codigo_bipado:
-            produto_encontrado = df_prod[df_prod['codigo_barras'] == codigo_bipado.strip()]
-            if not produto_encontrado.empty:
-                id_bipado = produto_encontrado['id_produto'].values[0]
-                index_padrao = opcoes_produtos.index(id_bipado)
-                st.success(f"✅ Produto lido: **{produto_encontrado['nome_produto'].values[0]}**")
-            else:
-                st.error("❌ Código de barras não encontrado no estoque.")
-
-        st.markdown("---")
-        st.markdown("**2. Concluir Venda**")
-        with st.form("form_venda", clear_on_submit=True):
-            dict_clientes = dict(zip(df_cli['id_cliente'], df_cli['nome']))
-            dict_vendedores = dict(zip(df_vend['id_vendedor'], df_vend['nome']))
-            dict_produtos = {row['id_produto']: f"[{row['codigo_barras']}] {row['nome_produto']} - R$ {row['preco_venda']:.2f} (Estoque: {row['quantidade_estoque']})" for _, row in df_prod.iterrows()}
+        # Formata o nome dos produtos para não mostrar "None" caso não tenha código
+        def formatar_nome_produto(row):
+            cod_str = f"[{row['codigo_barras']}] " if pd.notnull(row['codigo_barras']) else ""
+            return f"{cod_str}{row['nome_produto']} - R$ {row['preco_venda']:.2f} (Estoque: {row['quantidade_estoque']})"
             
+        dict_produtos = {row['id_produto']: formatar_nome_produto(row) for _, row in df_prod.iterrows()}
+        dict_clientes = dict(zip(df_cli['id_cliente'], df_cli['nome']))
+        dict_vendedores = dict(zip(df_vend['id_vendedor'], df_vend['nome']))
+        
+        # Alternância de Modos
+        modo_busca = st.radio("Selecione como deseja inserir o produto:", ["🔍 Usar Leitor de Código", "📝 Seleção Manual"], horizontal=True)
+        
+        produto_selecionado_id = None
+        
+        if modo_busca == "🔍 Usar Leitor de Código":
+            codigo_bipado = st.text_input("Bipe o código de barras do produto aqui:", key="leitor_pdv")
+            if codigo_bipado:
+                produto_encontrado = df_prod[df_prod['codigo_barras'] == codigo_bipado.strip()]
+                if not produto_encontrado.empty:
+                    produto_selecionado_id = produto_encontrado['id_produto'].values[0]
+                    st.success(f"✅ Produto lido: **{produto_encontrado['nome_produto'].values[0]}**")
+                else:
+                    st.error("❌ Código de barras não encontrado no estoque.")
+        
+        st.markdown("---")
+        
+        # O Formulário de Venda
+        with st.form("form_venda", clear_on_submit=True):
             col1, col2 = st.columns(2)
+            
             with col1:
-                produto_selecionado = st.selectbox("Selecione o Produto (Ou use o leitor acima)", options=opcoes_produtos, index=index_padrao, format_func=lambda x: dict_produtos[x])
+                # Decide qual campo de produto mostrar com base no modo escolhido
+                if modo_busca == "📝 Seleção Manual":
+                    produto_final = st.selectbox("Selecione o Produto", options=df_prod['id_produto'].tolist(), format_func=lambda x: dict_produtos[x])
+                else:
+                    if produto_selecionado_id:
+                        st.info(f"🛒 **Pronto para vender:** {dict_produtos[produto_selecionado_id]}")
+                        produto_final = produto_selecionado_id
+                    else:
+                        st.warning("Aguardando leitura do código de barras acima...")
+                        produto_final = None
+                        
                 quantidade = st.number_input("Quantidade", min_value=1, step=1)
             
             with col2:
@@ -232,43 +239,45 @@ with aba_pdv:
                 forma_pagamento = st.selectbox("Forma de Pagamento", ["PIX", "Cartão de Crédito", "Cartão de Débito", "Dinheiro"])
             
             if st.form_submit_button("💰 Confirmar e Baixar Estoque"):
-                estoque_atual = df_prod.loc[df_prod['id_produto'] == produto_selecionado, 'quantidade_estoque'].values[0]
-                
-                if quantidade > estoque_atual:
-                    st.error(f"❌ Estoque insuficiente! Só restam {estoque_atual} unidades deste produto.")
+                if produto_final is None:
+                    st.error("❌ Você precisa selecionar ou bipar um produto antes de confirmar!")
                 else:
-                    preco_unitario = df_prod.loc[df_prod['id_produto'] == produto_selecionado, 'preco_venda'].values[0]
-                    valor_total = float(preco_unitario) * quantidade
-                    data_hoje = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    estoque_atual = df_prod.loc[df_prod['id_produto'] == produto_final, 'quantidade_estoque'].values[0]
                     
-                    conn_venda = None
-                    try:
-                        conn_venda = conectar_banco()
-                        cursor = conn_venda.cursor()
-                        cursor.execute("INSERT INTO vendas (id_cliente, id_vendedor, data_venda, valor_total, forma_pagamento) VALUES (?, ?, ?, ?, ?)", 
-                                       (cliente_selecionado, vendedor_selecionado, data_hoje, valor_total, forma_pagamento))
-                        id_nova_venda = cursor.lastrowid
+                    if quantidade > estoque_atual:
+                        st.error(f"❌ Estoque insuficiente! Só restam {estoque_atual} unidades deste produto.")
+                    else:
+                        preco_unitario = df_prod.loc[df_prod['id_produto'] == produto_final, 'preco_venda'].values[0]
+                        valor_total = float(preco_unitario) * quantidade
+                        data_hoje = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                         
-                        cursor.execute("INSERT INTO itens_venda (id_venda, id_produto, quantidade, preco_unitario) VALUES (?, ?, ?, ?)",
-                                       (id_nova_venda, produto_selecionado, quantidade, float(preco_unitario)))
-                        
-                        cursor.execute("UPDATE produtos SET quantidade_estoque = quantidade_estoque - ? WHERE id_produto = ?",
-                                       (quantidade, produto_selecionado))
-                        conn_venda.commit()
-                        
-                        registrar_log("VENDA", f"Vendedor ID {vendedor_selecionado} vendeu R$ {valor_total:.2f} via {forma_pagamento}")
-                        st.success(f"✅ Venda de R$ {valor_total:.2f} registrada com sucesso!")
-                    except Exception as e:
-                        st.error(f"Erro ao registrar: {e}")
-                    finally:
-                        if conn_venda: conn_venda.close()
+                        conn_venda = None
+                        try:
+                            conn_venda = conectar_banco()
+                            cursor = conn_venda.cursor()
+                            cursor.execute("INSERT INTO vendas (id_cliente, id_vendedor, data_venda, valor_total, forma_pagamento) VALUES (?, ?, ?, ?, ?)", 
+                                           (cliente_selecionado, vendedor_selecionado, data_hoje, valor_total, forma_pagamento))
+                            id_nova_venda = cursor.lastrowid
+                            
+                            cursor.execute("INSERT INTO itens_venda (id_venda, id_produto, quantidade, preco_unitario) VALUES (?, ?, ?, ?)",
+                                           (id_nova_venda, produto_final, quantidade, float(preco_unitario)))
+                            
+                            cursor.execute("UPDATE produtos SET quantidade_estoque = quantidade_estoque - ? WHERE id_produto = ?",
+                                           (quantidade, produto_final))
+                            conn_venda.commit()
+                            
+                            registrar_log("VENDA", f"Vendedor ID {vendedor_selecionado} vendeu R$ {valor_total:.2f} via {forma_pagamento}")
+                            st.success(f"✅ Venda de R$ {valor_total:.2f} registrada com sucesso!")
+                        except Exception as e:
+                            st.error(f"Erro ao registrar: {e}")
+                        finally:
+                            if conn_venda: conn_venda.close()
 
 # --- ABA DE DASHBOARD ---
 with aba_dashboard:
     st.subheader("Inteligência de Vendas")
     
     conn = conectar_banco()
-    
     query_historico = '''
         SELECT 
             c.nome AS Cliente, vend.nome AS Vendedor, v.data_venda AS "Data", 
@@ -320,10 +329,12 @@ with aba_dashboard:
         st.dataframe(df_historico, use_container_width=True, hide_index=True)
 
 
-# --- ABA DE CADASTRAR PRODUTOS (COM GERAÇÃO DE CÓDIGO DE BARRAS) ---
+# --- ABA DE CADASTRAR PRODUTOS ---
 with aba_produtos:
     st.subheader("Cadastro em Lote de Produtos")
-    st.info("DICA: Se você deixar a coluna 'Código de Barras' vazia, o sistema vai gerar um código automático para você colar nas etiquetas!")
+    st.info("DICA: Se o produto já tem código na embalagem, digite-o. Se você deixar em branco, decida abaixo se o sistema deve ou não inventar um.")
+    
+    gerar_codigo_auto = st.checkbox("⚙️ Gerar código automático ('SYS-...') para produtos que eu deixar em branco?", value=True)
     
     df_vazio = pd.DataFrame(columns=["Código de Barras (Opcional)", "Categoria", "Nome/Sabor", "Preço Venda (R$)", "Custo (R$)", "Estoque Inicial"])
     
@@ -359,17 +370,20 @@ with aba_produtos:
                     custo = float(linha["Custo (R$)"]) if pd.notnull(linha["Custo (R$)"]) else 0.0
                     estoque = int(linha["Estoque Inicial"]) if pd.notnull(linha["Estoque Inicial"]) else 0
                     
-                    # Lógica de Geração Automática do Código de Barras
                     cod = str(linha["Código de Barras (Opcional)"]).strip()
+                    # Lógica de Controle do Código
                     if not cod or cod == "nan" or cod == "None":
-                        cod = f"SYS-{random.randint(100000, 999999)}"
+                        if gerar_codigo_auto:
+                            cod = f"SYS-{random.randint(100000, 999999)}"
+                        else:
+                            cod = None  # Salva puramente em branco no banco
                     
                     cursor.execute("INSERT INTO produtos (categoria, nome_produto, preco_venda, custo_unidade, quantidade_estoque, codigo_barras) VALUES (?, ?, ?, ?, ?, ?)", 
                                    (categoria, nome, preco, custo, estoque, cod))
                     qtd_cadastrada += 1
                 conn_prod.commit()
                 registrar_log("NOVOS_PRODUTOS", f"{qtd_cadastrada} produtos gravados.")
-                st.success(f"✅ {qtd_cadastrada} produto(s) gravado(s)! Verifique a aba Gerenciar Estoque para ver os códigos gerados.")
+                st.success(f"✅ {qtd_cadastrada} produto(s) gravado(s)! Verifique a aba Gerenciar Estoque.")
                 time.sleep(1.5)
                 st.rerun()
             except sqlite3.IntegrityError:
@@ -424,7 +438,7 @@ with aba_clientes:
     conn.close()
     st.dataframe(df_clientes_lista, use_container_width=True, hide_index=True)
 
-# --- ABA DE VENDEDORES (NOVA) ---
+# --- ABA DE VENDEDORES ---
 with aba_vendedores:
     st.subheader("👔 Gestão da Equipe de Vendas")
     colV1, colV2 = st.columns(2)
