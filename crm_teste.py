@@ -8,7 +8,8 @@ import os
 from dotenv import load_dotenv
 import random
 import streamlit.components.v1 as components
-import qrcode
+import qrcode  # <--- Adicione aqui
+from io import BytesIO # <--- Adicione aqui também
 
 # Carrega as variáveis de ambiente
 load_dotenv()
