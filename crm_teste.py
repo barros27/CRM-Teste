@@ -186,17 +186,23 @@ with aba_pdv:
     df_prod = pd.read_sql_query("SELECT id_produto, categoria, nome_produto, preco_venda, quantidade_estoque, codigo_barras FROM produtos", conn)
     conn.close()
     
-    if df_cli.empty or df_prod.empty or df_vend.empty:
-        st.warning("⚠️ Atenção: Cadastre pelo menos 1 Cliente, 1 Vendedor e 1 Produto nas abas ao lado para liberar o Caixa.")
+    # Agora só exige Vendedor e Produto para rodar o caixa. Cliente é opcional.
+    if df_prod.empty or df_vend.empty:
+        st.warning("⚠️ Atenção: Cadastre pelo menos 1 Vendedor e 1 Produto nas abas ao lado para liberar o Caixa.")
     else:
-        # Formata o nome dos produtos para não mostrar "None" caso não tenha código
+        # Formata o nome dos produtos
         def formatar_nome_produto(row):
             cod_str = f"[{row['codigo_barras']}] " if pd.notnull(row['codigo_barras']) else ""
             return f"{cod_str}{row['nome_produto']} - R$ {row['preco_venda']:.2f} (Estoque: {row['quantidade_estoque']})"
             
         dict_produtos = {row['id_produto']: formatar_nome_produto(row) for _, row in df_prod.iterrows()}
-        dict_clientes = dict(zip(df_cli['id_cliente'], df_cli['nome']))
         dict_vendedores = dict(zip(df_vend['id_vendedor'], df_vend['nome']))
+        
+        # Mapeamento do Cliente (Adiciona Consumidor Final)
+        dict_clientes = {0: "👤 Consumidor Final (Sem Cadastro)"}
+        if not df_cli.empty:
+            dict_clientes.update(dict(zip(df_cli['id_cliente'], df_cli['nome'])))
+        opcoes_clientes = list(dict_clientes.keys())
         
         # Alternância de Modos
         modo_busca = st.radio("Selecione como deseja inserir o produto:", ["🔍 Usar Leitor de Código", "📝 Seleção Manual"], horizontal=True)
@@ -220,7 +226,6 @@ with aba_pdv:
             col1, col2 = st.columns(2)
             
             with col1:
-                # Decide qual campo de produto mostrar com base no modo escolhido
                 if modo_busca == "📝 Seleção Manual":
                     produto_final = st.selectbox("Selecione o Produto", options=df_prod['id_produto'].tolist(), format_func=lambda x: dict_produtos[x])
                 else:
@@ -234,7 +239,7 @@ with aba_pdv:
                 quantidade = st.number_input("Quantidade", min_value=1, step=1)
             
             with col2:
-                cliente_selecionado = st.selectbox("Selecione o Cliente", options=df_cli['id_cliente'], format_func=lambda x: dict_clientes[x])
+                cliente_selecionado = st.selectbox("Selecione o Cliente (Ou deixe como Consumidor Final)", options=opcoes_clientes, format_func=lambda x: dict_clientes[x])
                 vendedor_selecionado = st.selectbox("Vendedor Responsável", options=df_vend['id_vendedor'], format_func=lambda x: dict_vendedores[x])
                 forma_pagamento = st.selectbox("Forma de Pagamento", ["PIX", "Cartão de Crédito", "Cartão de Débito", "Dinheiro"])
             
@@ -251,12 +256,14 @@ with aba_pdv:
                         valor_total = float(preco_unitario) * quantidade
                         data_hoje = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                         
+                        id_cliente_db = cliente_selecionado if cliente_selecionado != 0 else None
+                        
                         conn_venda = None
                         try:
                             conn_venda = conectar_banco()
                             cursor = conn_venda.cursor()
                             cursor.execute("INSERT INTO vendas (id_cliente, id_vendedor, data_venda, valor_total, forma_pagamento) VALUES (?, ?, ?, ?, ?)", 
-                                           (cliente_selecionado, vendedor_selecionado, data_hoje, valor_total, forma_pagamento))
+                                           (id_cliente_db, vendedor_selecionado, data_hoje, valor_total, forma_pagamento))
                             id_nova_venda = cursor.lastrowid
                             
                             cursor.execute("INSERT INTO itens_venda (id_venda, id_produto, quantidade, preco_unitario) VALUES (?, ?, ?, ?)",
@@ -278,14 +285,15 @@ with aba_dashboard:
     st.subheader("Inteligência de Vendas")
     
     conn = conectar_banco()
+    # Adicionado o COALESCE e LEFT JOIN para garantir que vendas de Consumidor Final apareçam no extrato
     query_historico = '''
         SELECT 
-            c.nome AS Cliente, vend.nome AS Vendedor, v.data_venda AS "Data", 
+            COALESCE(c.nome, 'Consumidor Final') AS Cliente, vend.nome AS Vendedor, v.data_venda AS "Data", 
             p.nome_produto AS Produto, i.quantidade AS Qtd, v.forma_pagamento AS "Pagamento",
             (i.quantidade * i.preco_unitario) AS "Total (R$)",
             ((i.quantidade * i.preco_unitario) - (i.quantidade * p.custo_unidade)) AS "Lucro (R$)"
         FROM vendas v
-        JOIN clientes c ON v.id_cliente = c.id_cliente
+        LEFT JOIN clientes c ON v.id_cliente = c.id_cliente
         LEFT JOIN vendedores vend ON v.id_vendedor = vend.id_vendedor
         JOIN itens_venda i ON v.id_venda = i.id_venda
         JOIN produtos p ON i.id_produto = p.id_produto
