@@ -442,7 +442,7 @@ with aba_produtos:
                     
                     cod = str(linha["Código de Barras (Opcional)"]).strip()
                     if not cod or cod == "nan" or cod == "None":
-                        cod = f"SYS-{random.randint(100000, 999999)}" if generar_codigo_auto else None
+                        cod = f"SYS-{random.randint(100000, 999999)}" if gerar_codigo_auto else None
                     
                     cursor.execute("INSERT INTO produtos (categoria, nome_produto, preco_venda, custo_unidade, quantidade_estoque, codigo_barras) VALUES (?, ?, ?, ?, ?, ?)", 
                                    (categoria, nome, preco, custo, estoque, cod))
