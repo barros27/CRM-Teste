@@ -8,13 +8,13 @@ import os
 from dotenv import load_dotenv
 import random
 import streamlit.components.v1 as components
-import qrcode  # <--- Adicione aqui
-from io import BytesIO # <--- Adicione aqui também
+import qrcode
+from io import BytesIO
 
-# Carrega as variáveis de ambiente
+# Carrega as variáveis de ambiente (.env local ou Secrets na Nuvem)
 load_dotenv()
 
-# Inicializa o estado para guardar o código que foi lido (evita perder dados nos cliques)
+# Inicializa o estado para guardar o código escaneado
 if 'codigo_bipado_atual' not in st.session_state:
     st.session_state['codigo_bipado_atual'] = ""
 
@@ -28,18 +28,20 @@ def criar_tabelas():
     conn = conectar_banco()
     cursor = conn.cursor()
     
+    # Tabela Clientes (com a nova coluna de Origem)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS clientes (
             id_cliente INTEGER PRIMARY KEY AUTOINCREMENT,
             nome TEXT NOT NULL,
-            email TEXT UNIQUE,
+            email TEXT,
             telefone TEXT,
             status TEXT DEFAULT 'Ativo',
-            origem TEXT,
+            origem TEXT DEFAULT 'Outros',
             data_cadastro TEXT
         )
     ''')
     
+    # Tabela Vendedores
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS vendedores (
             id_vendedor INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -48,6 +50,7 @@ def criar_tabelas():
         )
     ''')
     
+    # Tabela Produtos
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS produtos (
             id_produto INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -60,6 +63,7 @@ def criar_tabelas():
         )
     ''')
     
+    # Tabela Vendas
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS vendas (
             id_venda INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -73,6 +77,7 @@ def criar_tabelas():
         )
     ''')
     
+    # Tabela Itens Venda
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS itens_venda (
             id_item INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -85,6 +90,7 @@ def criar_tabelas():
         )
     ''')
 
+    # Tabela Logs
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS logs (
             data TEXT,
@@ -93,7 +99,7 @@ def criar_tabelas():
         )
     ''')
     
-    # "Vacinas" para atualizações estruturais sem perda de dados
+    # "Vacinas" de atualização estrutural para não quebrar bancos antigos
     try: cursor.execute("ALTER TABLE produtos ADD COLUMN quantidade_estoque INTEGER DEFAULT 0")
     except: pass
     try: cursor.execute("ALTER TABLE produtos ADD COLUMN categoria TEXT DEFAULT 'Normal'")
@@ -103,6 +109,8 @@ def criar_tabelas():
     try: cursor.execute("ALTER TABLE vendas ADD COLUMN id_vendedor INTEGER")
     except: pass
     try: cursor.execute("ALTER TABLE vendas ADD COLUMN forma_pagamento TEXT")
+    except: pass
+    try: cursor.execute("ALTER TABLE clientes ADD COLUMN origem TEXT DEFAULT 'Outros'")
     except: pass
     try: cursor.execute("UPDATE clientes SET email = NULL WHERE email = ''")
     except: pass
@@ -186,7 +194,7 @@ aba_pdv, aba_dashboard, aba_produtos, aba_estoque, aba_clientes, aba_vendedores 
 
 # --- ABA DE FRENTE DE CAIXA (PDV) ---
 with aba_pdv:
-    st.subheader("🛒 Caixa Omnichannel (Leitor, Celular ou Manual)")
+    st.subheader("🛒 Caixa Omnichannel")
     
     conn = conectar_banco()
     df_cli = pd.read_sql_query("SELECT id_cliente, nome FROM clientes", conn)
@@ -209,27 +217,22 @@ with aba_pdv:
             dict_clientes.update(dict(zip(df_cli['id_cliente'], df_cli['nome'])))
         opcoes_clientes = list(dict_clientes.keys())
         
-        # Menu de seleção do modo de entrada do item
         modo_busca = st.radio("Como deseja registrar o produto?", 
-                              ["🔍 Maquininha USB/Bluetooth", "📷 Câmera do Celular (Teste)", "📝 Seleção Manual"], 
+                              ["🔍 Maquininha USB/Bluetooth", "📷 Câmera do Celular (Teste QR)", "📝 Seleção Manual"], 
                               horizontal=True)
         
-        # Verifica se a câmera mandou algum código via URL (Query Parameters)
         if "bip_camera" in st.query_params:
             st.session_state['codigo_bipado_atual'] = st.query_params["bip_camera"]
-            del st.query_params["bip_camera"] # Limpa a URL imediatamente para não criar loops
+            del st.query_params["bip_camera"]
             st.rerun()
             
-        # Interface baseada no modo escolhido
         if modo_busca == "🔍 Maquininha USB/Bluetooth":
             codigo_bipado = st.text_input("Clique aqui e bipe o produto com a maquininha:", key="leitor_pdv")
             if codigo_bipado:
                 st.session_state['codigo_bipado_atual'] = codigo_bipado.strip()
                 
-        elif modo_busca == "📷 Câmera do Celular (Teste)":
-            st.info("Aponte a câmera traseira do celular para o código de barras da embalagem.")
-            
-            # Componente HTML injetando JavaScript seguro de scanner nativo
+        elif modo_busca == "📷 Câmera do Celular (Teste QR)":
+            st.info("Aponte a câmera traseira do celular para o QR Code gerado na aba de Estoque.")
             html_scanner = """
             <div id="scanner-container" style="width: 100%; max-width: 400px; height: 230px; margin: 0 auto; background: #222; border: 3px dashed #8e44ad; border-radius: 8px; overflow: hidden;"></div>
             <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
@@ -238,17 +241,17 @@ with aba_pdv:
                 Html5Qrcode.getCameras().then(devices => {
                     html5QrCode.start(
                         { facingMode: "environment" }, 
-                        { fps: 15, qrbox: function(w, h) { return { width: w * 0.8, height: h * 0.5 }; } },
+                        { fps: 30, qrbox: function(w, h) { return { width: w * 0.7, height: h * 0.7 }; } },
                         (decodedText, decodedResult) => {
                             const url = new URL(window.parent.location.href);
                             url.searchParams.set('bip_camera', decodedText);
                             window.parent.location.href = url.href;
                             html5QrCode.stop();
                         },
-                        (errorMessage) => {} // Varredura contínua silenciosa
+                        (errorMessage) => {}
                     ).catch(err => { console.error(err); });
                 }).catch(err => {
-                    document.getElementById('scanner-container').innerHTML = "<p style='color:red; padding:20px; text-align:center;'>Permissão de câmera negada ou não encontrada.</p>";
+                    document.getElementById('scanner-container').innerHTML = "<p style='color:red; padding:20px; text-align:center;'>Permissão de câmera negada.</p>";
                 });
             </script>
             """
@@ -256,7 +259,6 @@ with aba_pdv:
 
         st.markdown("---")
         
-        # Resolução do produto escaneado (Se aplicável)
         produto_final_id = None
         if modo_busca != "📝 Seleção Manual":
             codigo_procurado = st.session_state['codigo_bipado_atual']
@@ -270,39 +272,37 @@ with aba_pdv:
                         st.session_state['codigo_bipado_atual'] = ""
                         st.rerun()
                 else:
-                    st.error(f"❌ O código de barras '{codigo_procurado}' não está associado a nenhum produto cadastrado.")
-                    if st.button("🗑️ Limpar Código Errado"):
+                    st.error(f"❌ O código '{codigo_procurado}' não está cadastrado.")
+                    if st.button("🗑️ Limpar Código"):
                         st.session_state['codigo_bipado_atual'] = ""
                         st.rerun()
 
-        # Formulário de Conclusão de Venda
         with st.form("form_venda", clear_on_submit=True):
             col1, col2 = st.columns(2)
-            
             with col1:
                 if modo_busca == "📝 Seleção Manual":
                     produto_final_id = st.selectbox("Selecione o Produto", options=df_prod['id_produto'].tolist(), format_func=lambda x: dict_produtos[x])
                 else:
                     if produto_final_id:
-                        st.info(f"🛒 **Carregado no Carrinho:** {dict_produtos[produto_final_id]}")
+                        st.info(f"🛒 **No Carrinho:** {dict_produtos[produto_final_id]}")
                     else:
-                        st.warning("Aguardando leitura de código válidado...")
+                        st.warning("Aguardando leitura de código válido...")
                         
                 quantidade = st.number_input("Quantidade", min_value=1, step=1)
             
             with col2:
-                cliente_selecionado = st.selectbox("Identificar Cliente", options=opcoes_clientes, format_func=lambda x: dict_clientes[x])
+                cliente_selecionado = st.selectbox("Identificar Cliente (Opcional)", options=opcoes_clientes, format_func=lambda x: dict_clientes[x])
                 vendedor_selecionado = st.selectbox("Vendedor Responsável", options=df_vend['id_vendedor'], format_func=lambda x: dict_vendedores[x])
                 forma_pagamento = st.selectbox("Forma de Pagamento", ["PIX", "Cartão de Crédito", "Cartão de Débito", "Dinheiro"])
             
             if st.form_submit_button("💰 Confirmar e Baixar Estoque"):
                 if produto_final_id is None:
-                    st.error("❌ Erro: Não é possível processar sem um produto válido!")
+                    st.error("❌ Erro: Selecione ou escaneie um produto antes!")
                 else:
                     estoque_atual = df_prod.loc[df_prod['id_produto'] == produto_final_id, 'quantidade_estoque'].values[0]
                     
                     if quantidade > estoque_atual:
-                        st.error(f"❌ Estoque insuficiente! Só restam {estoque_atual} unidades deste produto.")
+                        st.error(f"❌ Estoque insuficiente! Restam apenas {estoque_atual} unidades.")
                     else:
                         preco_unitario = df_prod.loc[df_prod['id_produto'] == produto_final_id, 'preco_venda'].values[0]
                         valor_total = float(preco_unitario) * quantidade
@@ -325,10 +325,10 @@ with aba_pdv:
                                            (quantidade, produto_final_id))
                             conn_venda.commit()
                             
-                            st.session_state['codigo_bipado_atual'] = "" # Limpa a memória do leitor
-                            registrar_log("VENDA", f"Vendedor ID {vendedor_selecionado} vendeu R$ {valor_total:.2f} via {forma_pagamento}")
-                            st.success(f"✅ Venda de R$ {valor_total:.2f} registrada com sucesso!")
-                            time.sleep(1)
+                            st.session_state['codigo_bipado_atual'] = ""
+                            registrar_log("VENDA", f"Vendedor ID {vendedor_selecionado} vendeu R$ {valor_total:.2f}")
+                            st.success(f"✅ Venda de R$ {valor_total:.2f} registrada!")
+                            time.sleep(0.8)
                             st.rerun()
                         except Exception as e:
                             st.error(f"Erro ao registrar: {e}")
@@ -337,12 +337,14 @@ with aba_pdv:
 
 # --- ABA DE DASHBOARD ---
 with aba_dashboard:
-    st.subheader("Inteligência de Vendas")
+    st.subheader("Inteligência de Vendas e Canais")
     
     conn = conectar_banco()
     query_historico = '''
         SELECT 
-            COALESCE(c.nome, 'Consumidor Final') AS Cliente, vend.nome AS Vendedor, v.data_venda AS "Data", 
+            COALESCE(c.nome, 'Consumidor Final') AS Cliente, 
+            COALESCE(c.origem, 'Balcão (Sem Cadastro)') AS Origem,
+            vend.nome AS Vendedor, v.data_venda AS "Data", 
             p.nome_produto AS Produto, i.quantidade AS Qtd, v.forma_pagamento AS "Pagamento",
             (i.quantidade * i.preco_unitario) AS "Total (R$)",
             ((i.quantidade * i.preco_unitario) - (i.quantidade * p.custo_unidade)) AS "Lucro (R$)"
@@ -358,7 +360,7 @@ with aba_dashboard:
     finally: conn.close()
     
     if df_historico.empty:
-        st.info("O Dashboard será gerado após a sua primeira venda.")
+        st.info("O Dashboard será gerado após a primeira venda.")
     else:
         faturamento_total = df_historico['Total (R$)'].sum()
         lucro_total = df_historico['Lucro (R$)'].sum()
@@ -367,8 +369,7 @@ with aba_dashboard:
             vendedor_top = df_historico.groupby('Vendedor')['Total (R$)'].sum().idxmax()
             pagamento_top = df_historico['Pagamento'].mode()[0]
         except:
-            vendedor_top = "N/A"
-            pagamento_top = "N/A"
+            vendedor_top, pagamento_top = "N/A", "N/A"
 
         colA, colB, colC, colD = st.columns(4)
         colA.metric("Faturamento Global", f"R$ {faturamento_total:,.2f}")
@@ -377,32 +378,40 @@ with aba_dashboard:
         colD.metric("💳 Pagamento Favorito", pagamento_top)
 
         st.markdown("---")
-        col_graf1, col_graf2 = st.columns(2)
         
+        # Linha 1 de Gráficos: Vendedores e Pagamentos
+        col_graf1, col_graf2 = st.columns(2)
         with col_graf1:
             df_vendedores = df_historico.groupby('Vendedor')['Total (R$)'].sum().reset_index()
-            st.plotly_chart(px.bar(df_vendedores, x='Vendedor', y='Total (R$)', title='Desempenho por Vendedor', color='Vendedor', text_auto='.2f'), use_container_width=True)
-            
+            st.plotly_chart(px.bar(df_vendedores, x='Vendedor', y='Total (R$)', title='Faturamento por Vendedor', color='Vendedor', text_auto='.2f'), use_container_width=True)
         with col_graf2:
             df_pagamentos = df_historico.groupby('Pagamento')['Total (R$)'].sum().reset_index()
-            st.plotly_chart(px.pie(df_pagamentos, names='Pagamento', values='Total (R$)', title='Métodos de Pagamento Utilizados', hole=0.4), use_container_width=True)
+            st.plotly_chart(px.pie(df_pagamentos, names='Pagamento', values='Total (R$)', title='Métodos de Pagamento', hole=0.4), use_container_width=True)
             
+        st.markdown("---")
+        
+        # Linha 2 de Gráficos: Sabores/Produtos Mais Vendidos e Origem do Cliente
+        col_graf3, col_graf4 = st.columns(2)
+        with col_graf3:
+            df_produtos_ranking = df_historico.groupby('Produto')['Qtd'].sum().reset_index().sort_values(by='Qtd', ascending=True)
+            st.plotly_chart(px.bar(df_produtos_ranking, x='Qtd', y='Produto', orientation='h', title='Sabores e Produtos Mais Vendidos (Quantidade)', color='Produto'), use_container_width=True)
+        with col_graf4:
+            df_canais = df_historico.groupby('Origem')['Total (R$)'].sum().reset_index()
+            st.plotly_chart(px.pie(df_canais, names='Origem', values='Total (R$)', title='De onde vêm as Vendas (Canais de Atração)', hole=0.4), use_container_width=True)
+
         st.markdown("### 📋 Extrato Completo de Operações")
         st.dataframe(df_historico, use_container_width=True, hide_index=True)
-
 
 # --- ABA DE CADASTRAR PRODUTOS ---
 with aba_produtos:
     st.subheader("Cadastro em Lote de Produtos")
-    st.info("DICA: Se o produto já tem código na embalagem, digite-o. Se você deixar em branco, decida abaixo se o sistema deve ou não inventar um.")
+    st.info("DICA: Se deixar em branco, decida abaixo se o sistema gera os códigos automaticamente.")
     
-    gerar_codigo_auto = st.checkbox("⚙️ Gerar código automático ('SYS-...') para produtos que eu deixar em branco?", value=True)
+    gerar_codigo_auto = st.checkbox("⚙️ Gerar código automático ('SYS-...') para itens sem código?", value=True)
     
     df_vazio = pd.DataFrame(columns=["Código de Barras (Opcional)", "Categoria", "Nome/Sabor", "Preço Venda (R$)", "Custo (R$)", "Estoque Inicial"])
-    
     df_editado = st.data_editor(
-        df_vazio,
-        num_rows="dynamic",
+        df_vazio, num_rows="dynamic",
         column_config={
             "Código de Barras (Opcional)": st.column_config.TextColumn("Código de Barras (Opcional)"),
             "Categoria": st.column_config.SelectboxColumn("Categoria", options=["Normal", "Big", "Paleta", "Diversos"], required=True),
@@ -417,14 +426,13 @@ with aba_produtos:
     if st.button("💾 Gravar Produtos no Estoque"):
         linhas_validas = df_editado.dropna(subset=["Categoria", "Nome/Sabor"])
         if linhas_validas.empty:
-            st.warning("⚠️ Preencha pelo menos um produto para gravar.")
+            st.warning("⚠️ Preencha pelo menos um produto.")
         else:
             conn_prod = None
             try:
                 conn_prod = conectar_banco()
                 cursor = conn_prod.cursor()
                 qtd_cadastrada = 0
-                
                 for index, linha in linhas_validas.iterrows():
                     categoria = linha["Categoria"]
                     nome = linha["Nome/Sabor"]
@@ -434,92 +442,92 @@ with aba_produtos:
                     
                     cod = str(linha["Código de Barras (Opcional)"]).strip()
                     if not cod or cod == "nan" or cod == "None":
-                        if gerar_codigo_auto:
-                            cod = f"SYS-{random.randint(100000, 999999)}"
-                        else:
-                            cod = None  
+                        cod = f"SYS-{random.randint(100000, 999999)}" if generar_codigo_auto else None
                     
                     cursor.execute("INSERT INTO produtos (categoria, nome_produto, preco_venda, custo_unidade, quantidade_estoque, codigo_barras) VALUES (?, ?, ?, ?, ?, ?)", 
                                    (categoria, nome, preco, custo, estoque, cod))
                     qtd_cadastrada += 1
                 conn_prod.commit()
-                registrar_log("NOVOS_PRODUTOS", f"{qtd_cadastrada} produtos gravados.")
                 st.success(f"✅ {qtd_cadastrada} produto(s) gravado(s)!")
-                time.sleep(1.5)
+                time.sleep(1)
                 st.rerun()
             except sqlite3.IntegrityError:
-                st.error("❌ Erro: Um ou mais Códigos de Barras digitados já existem no sistema. Eles devem ser únicos.")
-            except Exception as e:
-                st.error(f"Erro ao salvar: {e}")
+                st.error("❌ Erro: Código de barras duplicado.")
             finally:
                 if conn_prod: conn_prod.close()
 
-# --- ABA DE GERENCIAR ESTOQUE ---
+# --- ABA DE GERENCIAR ESTOQUE (COM QUANTIDADE PROMINENTE E ETIOUETAS QR) ---
 with aba_estoque:
-    st.subheader("Gerenciar Estoque e Etiquetas QR Code")
+    st.subheader("📋 Controle de Estoque Atual")
     from io import BytesIO
     
     conn = conectar_banco()
-    df_prod_lista = pd.read_sql_query("SELECT id_produto as ID, codigo_barras as 'Código', nome_produto as Produto, preco_venda FROM produtos", conn)
+    # Puxa o estoque de forma totalmente transparente na listagem principal
+    df_prod_lista = pd.read_sql_query("SELECT id_produto as ID, codigo_barras as 'Código de Barras', categoria as Categoria, nome_produto as 'Produto/Sabor', preco_venda as 'Preço de Venda (R$)', quantidade_estoque as 'Quantidade em Estoque' FROM produtos", conn)
     conn.close()
     
     if not df_prod_lista.empty:
+        # Exibe a tabela onde o cliente vê de cara a "Quantidade em Estoque" de cada sabor
         st.dataframe(df_prod_lista, use_container_width=True, hide_index=True)
         
         st.markdown("---")
-        st.subheader("🖨️ Gerador de QR Code para Etiqueta")
+        st.subheader("🖨️ Gerador Inteligente de Etiquetas QR Code")
+        st.info("Gere QR Codes de alta leitura para os produtos artesanais que não têm código próprio de fábrica.")
         
-        produto_qr = st.selectbox("Escolha o produto para gerar o QR Code:", options=df_prod_lista['ID'], format_func=lambda x: f"{df_prod_lista.loc[df_prod_lista['ID']==x, 'Produto'].values[0]}")
+        produto_qr = st.selectbox("Escolha o produto para gerar etiqueta:", options=df_prod_lista['ID'], format_func=lambda x: f"{df_prod_lista.loc[df_prod_lista['ID']==x, 'Produto/Sabor'].values[0]}")
         
-        if st.button("Gerar QR Code"):
-            cod = df_prod_lista.loc[df_prod_lista['ID']==produto_qr, 'Código'].values[0]
+        if st.button("Gerar Código QR"):
+            cod = df_prod_lista.loc[df_prod_lista['ID']==produto_qr, 'Código de Barras'].values[0]
             if cod:
-                # Cria a imagem do QR Code
-                qr = qrcode.QRCode(version=1, box_size=10, border=5)
+                qr = qrcode.QRCode(version=1, error_correction=qrcode.constants.ERROR_CORRECT_H, box_size=15, border=4)
                 qr.add_data(cod)
                 qr.make(fit=True)
                 img = qr.make_image(fill_color="black", back_color="white")
                 
-                # Converte para exibir no Streamlit
                 buf = BytesIO()
                 img.save(buf, format="PNG")
-                st.image(buf, caption=f"QR Code para: {cod}", width=200)
-                st.info("Clique com o botão direito na imagem e selecione 'Salvar imagem como' para imprimir sua etiqueta.")
+                st.image(buf, caption=f"Código de Leitura: {cod}", width=250)
+                st.success("✨ QR Code Pronto! Clique com o botão direito para salvar e imprimir.")
             else:
-                st.error("Este produto não possui código cadastrado.")
+                st.error("Este produto foi salvo sem nenhum código.")
 
         st.markdown("### 🗑️ Remover Produto")
         with st.form("form_remover_produto"):
-            produto_a_remover = st.selectbox("Selecione o produto a excluir", options=df_prod_lista['ID'], format_func=lambda x: f"ID: {x}")
+            produto_a_remover = st.selectbox("Selecione o ID a excluir", options=df_prod_lista['ID'])
             if st.form_submit_button("Remover Definitivamente"):
                 conn_rem = conectar_banco()
                 conn_rem.cursor().execute("DELETE FROM produtos WHERE id_produto = ?", (produto_a_remover,))
                 conn_rem.commit()
                 conn_rem.close()
                 st.success("✅ Produto removido!")
+                time.sleep(0.5)
                 st.rerun()
     else:
-        st.info("Estoque vazio.")
+        st.info("Nenhum produto em estoque no momento.")
 
-# --- ABA DE CLIENTES ---
+# --- ABA DE CLIENTES (COM ORIGEM) ---
 with aba_clientes:
-    st.subheader("Gestão de Clientes")
-    with st.expander("➕ Adicionar Novo Cliente", expanded=True):
+    st.subheader("👥 Gestão de Clientes")
+    with st.expander("➕ Cadastrar Novo Cliente", expanded=False):
         with st.form("form_cliente", clear_on_submit=True):
             nome = st.text_input("Nome Completo *")
             telefone = st.text_input("Telefone")
             email = st.text_input("E-mail")
+            # Novo campo solicitado
+            origem_cliente = st.selectbox("Como esse cliente conheceu a loja?", ["Instagram", "Indicação", "Panfleto", "TikTok", "Outros"])
+            
             if st.form_submit_button("💾 Salvar Cliente") and nome.strip():
                 conn = conectar_banco()
-                conn.cursor().execute("INSERT INTO clientes (nome, email, telefone, data_cadastro) VALUES (?, ?, ?, ?)", (nome, email, telefone, datetime.now().strftime("%Y-%m-%d")))
+                conn.cursor().execute("INSERT INTO clientes (nome, email, telefone, origem, data_cadastro) VALUES (?, ?, ?, ?, ?)", 
+                                      (nome, email, telefone, origem_cliente, datetime.now().strftime("%Y-%m-%d")))
                 conn.commit()
                 conn.close()
-                st.success("✅ Cliente Salvo!")
-                time.sleep(1)
+                st.success(f"✅ Cliente {nome} cadastrado com sucesso!")
+                time.sleep(0.5)
                 st.rerun()
                 
     conn = conectar_banco()
-    df_clientes_lista = pd.read_sql_query("SELECT id_cliente as ID, nome, telefone, email FROM clientes", conn)
+    df_clientes_lista = pd.read_sql_query("SELECT id_cliente as ID, nome as Nome, telefone as Telefone, email as 'E-mail', origem as 'Como Conheceu' FROM clientes", conn)
     conn.close()
     st.dataframe(df_clientes_lista, use_container_width=True, hide_index=True)
 
@@ -539,10 +547,8 @@ with aba_vendedores:
                     conn_vend.commit()
                     conn_vend.close()
                     st.success("Vendedor Adicionado!")
-                    time.sleep(1)
+                    time.sleep(0.5)
                     st.rerun()
-                else:
-                    st.error("Digite o nome.")
                     
     with colV2:
         conn = conectar_banco()
@@ -552,14 +558,14 @@ with aba_vendedores:
         if not df_vendedores_lista.empty:
             st.dataframe(df_vendedores_lista, use_container_width=True, hide_index=True)
             with st.form("form_rem_vendedor"):
-                vend_rem = st.selectbox("Demitir/Remover Vendedor", options=df_vendedores_lista['ID'], format_func=lambda x: f"ID: {x}")
-                if st.form_submit_button("Remover"):
+                vend_rem = st.selectbox("Remover Vendedor", options=df_vendedores_lista['ID'], format_func=lambda x: f"ID: {x}")
+                if st.form_submit_button("Confirmar Remoção"):
                     conn_rem = conectar_banco()
                     conn_rem.cursor().execute("DELETE FROM vendedores WHERE id_vendedor = ?", (vend_rem,))
                     conn_rem.commit()
                     conn_rem.close()
-                    st.success("Removido!")
-                    time.sleep(1)
+                    st.success("Vendedor Removido!")
+                    time.sleep(0.5)
                     st.rerun()
         else:
-            st.info("Adicione o seu primeiro vendedor.")
+            st.info("Nenhum vendedor cadastrado.")
